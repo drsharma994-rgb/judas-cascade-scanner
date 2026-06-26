@@ -253,6 +253,72 @@ function variancePop(a) { // population variance of trial Sharpes
 }
 function round4(x) { return Number.isFinite(x) ? Math.round(x * 1e4) / 1e4 : null; }
 
+/* ---------- shared building block for single-symbol AND sweep ----------
+ * Split rows train/test and return each factor's IS/OOS fee-netted returns.
+ * Same FACTORS, same netReturns, same split as evaluateFactors — so a sweep
+ * nets returns identically to a single run (no divergence).
+ * ------------------------------------------------------------------------ */
+function oosFactorReturns(rows, factors, opt) {
+  const o = opt || {};
+  const facs = factors || FACTORS;
+  const trainFrac = Number.isFinite(o.train_frac) ? o.train_frac : 0.6;
+  const clean = (rows || []).filter(r => r && Number.isFinite(r.fwdRet));
+  const split = Math.max(2, Math.floor(clean.length * trainFrac));
+  const trainRows = clean.slice(0, split);
+  const testRows = clean.slice(split);
+  const leg = (rs) => { const fwd = rs.map(r => r.fwdRet); return (fn) => netReturns(rs.map(fn), fwd, o); };
+  const trainLeg = leg(trainRows), testLeg = leg(testRows);
+  const perFactor = {};
+  for (const name of Object.keys(facs)) perFactor[name] = { is: trainLeg(facs[name]), oos: testLeg(facs[name]) };
+  return { perFactor, n_total: clean.length, n_train: trainRows.length, n_test: testRows.length };
+}
+
+/* ---------- pooled sweep evaluation ----------
+ * Deflate every (symbol x timeframe x factor) cell against the expected-max
+ * Sharpe of the WHOLE sweep, not each single run. Sweeping is itself multiple
+ * testing; pooling is what stops a wide sweep from manufacturing false
+ * survivors. cells: [{ key, symbol, resolution, factor, is, oos }].
+ * ------------------------------------------------------------------------ */
+function evaluatePooled(cells, opt) {
+  const o = opt || {};
+  const dsrThreshold = Number.isFinite(o.dsr_threshold) ? o.dsr_threshold : 0.95;
+  const enriched = (cells || []).map(c => Object.assign({}, c, { srOos: sharpe(c.oos || []) }));
+  const active = enriched.filter(c => Number.isFinite(c.srOos));
+  const sharpes = active.map(c => c.srOos);
+  const srVar = sharpes.length > 1 ? variancePop(sharpes) : 0;
+  const nTrials = active.length;
+  const sr0 = expectedMaxSharpe(srVar, nTrials);
+  const results = enriched.map(c => {
+    const rOos = c.oos || [];
+    const dsr = probabilisticSharpe(rOos, sr0);
+    return {
+      key: c.key, symbol: c.symbol, resolution: c.resolution, factor: c.factor,
+      n_oos: rOos.length,
+      sharpe_is_perperiod: round4(sharpe(c.is || [])),
+      sharpe_oos_perperiod: round4(c.srOos),
+      psr_vs_zero: round4(probabilisticSharpe(rOos, 0)),
+      deflated_sharpe: round4(dsr),
+      survives: Number.isFinite(dsr) && dsr >= dsrThreshold,
+      active: Number.isFinite(c.srOos),
+    };
+  });
+  results.sort((a, b) => (b.deflated_sharpe || -1) - (a.deflated_sharpe || -1));
+  return {
+    n_cells: enriched.length,
+    n_active_trials: nTrials,
+    n_inactive: enriched.length - nTrials,
+    expected_max_sharpe_null_perperiod: round4(sr0),
+    trial_sharpe_variance: round4(srVar),
+    dsr_threshold: dsrThreshold,
+    results,
+    survivors: results.filter(r => r.survives).map(r => r.key),
+    note: "Pooled across the whole sweep: the deflated-Sharpe bar accounts for EVERY " +
+      "symbol x timeframe x factor cell tried, so a wide sweep cannot manufacture survivors. " +
+      "Out-of-sample, fee-netted. Not financial advice.",
+    generated_at: new Date().toISOString(),
+  };
+}
+
 /* ---------- candle -> feature rows adapter ----------
  * PURE: takes raw candles ({t,o,h,l,c,v}[], ascending) plus the project's OWN
  * indicator functions injected as `deps` ({ emaSeries, rsiSeries, cusumRegime }),
@@ -301,5 +367,5 @@ module.exports = {
   mean, std, skewness, kurtosisRaw, normCdf, normInv,
   sharpe, probabilisticSharpe, expectedMaxSharpe,
   // factor evaluation
-  netReturns, evaluateFactors, buildFeatureRows, FACTORS,
+  netReturns, evaluateFactors, buildFeatureRows, oosFactorReturns, evaluatePooled, FACTORS,
 };

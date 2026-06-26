@@ -569,6 +569,55 @@ async function handleFactorlab(req, res) {
   }
 }
 
+// Sweep factor evaluation across MANY symbols x timeframes, pooling the
+// deflated-Sharpe correction over every cell (so a wide sweep cannot
+// manufacture survivors). Query: symbols=BTCUSD,ETHUSD (required, comma-sep),
+// resolutions=1h,4h (default 1h), bars, ema_fast, ema_slow, train_frac,
+// dsr_threshold. Capped at 16 symbol×timeframe combos per call (one candle
+// fetch each; sequential). e.g. /api/factorlab/sweep?symbols=BTCUSD,ETHUSD&resolutions=1h,4h
+async function handleFactorlabSweep(req, res) {
+  try {
+    const q = req.query || {};
+    const symbols = String(q.symbols || "").toUpperCase().split(",").map(s => s.trim()).filter(Boolean);
+    const resolutions = String(q.resolutions || "1h").split(",").map(s => s.trim()).filter(Boolean);
+    if (!symbols.length) return res.status(400).json({ ok: false, error: "symbols required (comma-separated)" });
+    const combos = symbols.length * resolutions.length;
+    if (combos > 16) return res.status(400).json({ ok: false, error: `too many combos (${combos}); max 16 symbol×timeframe per sweep` });
+    const bars = Math.max(120, Math.min(2000, parseInt(q.bars, 10) || 500));
+    const numq = (v) => (v != null && Number.isFinite(parseFloat(v)) ? parseFloat(v) : undefined);
+    const buildOpt = {};
+    if (numq(q.ema_fast) !== undefined) buildOpt.ema_fast = numq(q.ema_fast);
+    if (numq(q.ema_slow) !== undefined) buildOpt.ema_slow = numq(q.ema_slow);
+    const evalOpt = {};
+    if (numq(q.train_frac) !== undefined) evalOpt.train_frac = numq(q.train_frac);
+    if (numq(q.dsr_threshold) !== undefined) evalOpt.dsr_threshold = numq(q.dsr_threshold);
+    const cfg = buildConfig({});
+    const client = new DeltaPublic(cfg);
+    const cells = [];
+    const skipped = [];
+    for (const symbol of symbols) {
+      for (const resolution of resolutions) {
+        let candles = null;
+        try { candles = await client.candles(symbol, resolution, bars); } catch (e) { candles = null; }
+        if (!candles || candles.length < 120) { skipped.push(`${symbol}|${resolution}`); continue; }
+        const rows = factorlab.buildFeatureRows(candles, { emaSeries, rsiSeries, cusumRegime }, buildOpt);
+        const fr = factorlab.oosFactorReturns(rows, factorlab.FACTORS, evalOpt);
+        for (const factor of Object.keys(fr.perFactor)) {
+          cells.push({
+            key: `${symbol}|${resolution}|${factor}`, symbol, resolution, factor,
+            is: fr.perFactor[factor].is, oos: fr.perFactor[factor].oos,
+          });
+        }
+      }
+    }
+    if (!cells.length) return res.status(404).json({ ok: false, error: "no usable data for any requested symbol/timeframe", skipped });
+    const out = factorlab.evaluatePooled(cells, evalOpt);
+    res.json(Object.assign({ ok: true, symbols, resolutions, bars, skipped }, out));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+}
+
 // Shadow position-sizing backtest (pure analysis; no live sizing changed, no TP
 // moved). Optional query overrides: base_risk_pct, kelly_fraction, kelly_cap,
 // tier_min_n. e.g. /api/tradelog/sizing?base_risk_pct=1&kelly_fraction=0.25
@@ -618,6 +667,7 @@ async function handleResolve(req, res) {
 app.get("/api/tradelog/expectancy", handleExpectancy);
 app.get("/api/tradelog/sizing", handleSizing);
 app.get("/api/factorlab", handleFactorlab);
+app.get("/api/factorlab/sweep", handleFactorlabSweep);
 app.get("/api/tradelog/recent", handleRecent);
 app.post("/api/tradelog/resolve", mutationLimiter, handleResolve);
 // Legacy aliases (reference compat): /api/log -> expectancy, /api/log/raw ->
