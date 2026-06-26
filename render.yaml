@@ -1,0 +1,16 @@
+# Render Blueprint — auto-configures the service when you connect this repo.
+# Render injects PORT; server.js already binds process.env.PORT on 0.0.0.0 and
+# serves the PWA + /api/* from one process, so this is a single free web service.
+services:
+  - type: web
+    name: judas-cascade-scanner
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    # Optional: uncomment to set the dataset resolve cadence (minutes).
+    # envVars:
+    #   - key: RESOLVE_INTERVAL_MIN
+    #     value: "15"
