@@ -303,6 +303,29 @@ function evaluatePooled(cells, opt) {
     };
   });
   results.sort((a, b) => (b.deflated_sharpe || -1) - (a.deflated_sharpe || -1));
+  // Group summaries so the timeframe / factor split is explicit, not eyeballed.
+  // Aggregated over ACTIVE cells only (a finite OOS Sharpe).
+  const groupSummary = (keyFn) => {
+    const g = {};
+    for (const r of results) { if (!r.active) continue; const k = keyFn(r); (g[k] = g[k] || []).push(r); }
+    const out = {};
+    for (const k of Object.keys(g)) {
+      const arr = g[k];
+      const srs = arr.map(r => r.sharpe_oos_perperiod).filter(Number.isFinite);
+      const dsrs = arr.map(r => r.deflated_sharpe).filter(Number.isFinite);
+      const best = arr.reduce((a, b) => ((b.deflated_sharpe || -1) > (a.deflated_sharpe || -1) ? b : a));
+      out[k] = {
+        n_active: arr.length,
+        mean_sharpe_oos: round4(mean(srs)),
+        mean_deflated_sharpe: round4(mean(dsrs)),
+        best_key: best.key,
+        best_deflated_sharpe: best.deflated_sharpe,
+      };
+    }
+    return out;
+  };
+  const by_resolution = groupSummary(r => r.resolution);
+  const by_factor = groupSummary(r => r.factor);
   return {
     n_cells: enriched.length,
     n_active_trials: nTrials,
@@ -310,6 +333,8 @@ function evaluatePooled(cells, opt) {
     expected_max_sharpe_null_perperiod: round4(sr0),
     trial_sharpe_variance: round4(srVar),
     dsr_threshold: dsrThreshold,
+    by_resolution,
+    by_factor,
     results,
     survivors: results.filter(r => r.survives).map(r => r.key),
     note: "Pooled across the whole sweep: the deflated-Sharpe bar accounts for EVERY " +
