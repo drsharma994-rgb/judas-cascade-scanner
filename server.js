@@ -568,6 +568,11 @@ async function handleFactorlab(req, res) {
     res.status(500).json({ ok: false, error: String(e && e.message || e) });
   }
 }
+
+// Shadow position-sizing backtest (pure analysis; no live sizing changed, no TP
+// moved). Optional query overrides: base_risk_pct, kelly_fraction, kelly_cap,
+// tier_min_n. e.g. /api/tradelog/sizing?base_risk_pct=1&kelly_fraction=0.25
+function handleSizing(req, res) {
   try {
     const q = req.query || {};
     const numq = (v) => (v != null && Number.isFinite(parseFloat(v)) ? parseFloat(v) : undefined);
