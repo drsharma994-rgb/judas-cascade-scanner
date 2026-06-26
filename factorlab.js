@@ -195,8 +195,13 @@ function evaluateFactors(rows, factors, opt) {
     oosSharpe[name] = sharpe(oosReturns[name]);
   }
   const validSharpes = names.map(n => oosSharpe[n]).filter(Number.isFinite);
+  // Only factors that actually traded (finite OOS Sharpe) count as trials. An
+  // unwired factor (e.g. funding before its feed exists) emits a flat 0 signal,
+  // never trades, and must NOT inflate the multiple-testing bar for the others.
+  const activeNames = names.filter(n => Number.isFinite(oosSharpe[n]));
+  const inactiveNames = names.filter(n => !Number.isFinite(oosSharpe[n]));
   const srVar = validSharpes.length > 1 ? variancePop(validSharpes) : 0;
-  const nTrials = names.length;
+  const nTrials = activeNames.length;
   const sr0 = expectedMaxSharpe(srVar, nTrials); // per-period benchmark
 
   const results = names.map(name => {
@@ -227,6 +232,7 @@ function evaluateFactors(rows, factors, opt) {
     n_train: trainRows.length,
     n_test: testRows.length,
     n_factors_tried: nTrials,
+    inactive_factors: inactiveNames,
     expected_max_sharpe_null_perperiod: round4(sr0),
     trial_sharpe_variance: round4(srVar),
     dsr_threshold: dsrThreshold,
@@ -247,10 +253,53 @@ function variancePop(a) { // population variance of trial Sharpes
 }
 function round4(x) { return Number.isFinite(x) ? Math.round(x * 1e4) / 1e4 : null; }
 
+/* ---------- candle -> feature rows adapter ----------
+ * PURE: takes raw candles ({t,o,h,l,c,v}[], ascending) plus the project's OWN
+ * indicator functions injected as `deps` ({ emaSeries, rsiSeries, cusumRegime }),
+ * so there is NO duplicated/divergent signal logic and NO network here. Produces
+ * the feature rows evaluateFactors expects, each tagged with the NEXT bar's
+ * realized return (fwdRet) — strictly no look-ahead: row i's features use only
+ * closes[0..i], and fwdRet is the move from i to i+1.
+ *
+ * fundingZ is left null until a funding feed is wired (FUNDING:-prefixed candles,
+ * valid 2026-06-12+). With it null, the funding_fade factor stays flat/inactive
+ * rather than trading on a fabricated value.
+ * ------------------------------------------------------------------------ */
+function buildFeatureRows(candles, deps, opt) {
+  const o = opt || {};
+  const fast = Number.isFinite(o.ema_fast) ? o.ema_fast : 20;
+  const slow = Number.isFinite(o.ema_slow) ? o.ema_slow : 50;
+  const rsiP = Number.isFinite(o.rsi_period) ? o.rsi_period : 14;
+  const cusumWin = Number.isFinite(o.cusum_window) ? o.cusum_window : 60;
+  const cusumThr = Number.isFinite(o.cusum_threshold) ? o.cusum_threshold : 1.0;
+  if (!Array.isArray(candles) || candles.length < Math.max(slow, rsiP + 1) + 2) return [];
+  const closes = candles.map(c => c.c);
+  const emaF = (deps.emaSeries && deps.emaSeries(closes, fast)) || [];
+  const emaS = (deps.emaSeries && deps.emaSeries(closes, slow)) || [];
+  const rsiArr = (deps.rsiSeries && deps.rsiSeries(closes, rsiP)) || [];
+  const rows = [];
+  for (let i = 0; i < closes.length - 1; i++) { // -1: need a forward bar
+    const rsi = rsiArr[i], ef = emaF[i], es = emaS[i];
+    if (!Number.isFinite(rsi) || !Number.isFinite(ef) || !Number.isFinite(es)) continue;
+    const fwdRet = closes[i] > 0 ? (closes[i + 1] - closes[i]) / closes[i] : NaN;
+    if (!Number.isFinite(fwdRet)) continue;
+    // CUSUM on the TRAILING window only — never the full series (that would leak
+    // future returns into an earlier bar's regime read).
+    let cusumDir = "FLAT";
+    if (deps.cusumRegime) {
+      const win = closes.slice(Math.max(0, i - cusumWin + 1), i + 1);
+      const cr = deps.cusumRegime(win, cusumThr);
+      cusumDir = Array.isArray(cr) ? cr[0] : "FLAT";
+    }
+    rows.push({ t: candles[i].t, rsi, emaFast: ef, emaSlow: es, cusumDir, fundingZ: null, fwdRet });
+  }
+  return rows;
+}
+
 module.exports = {
   // stats core
   mean, std, skewness, kurtosisRaw, normCdf, normInv,
   sharpe, probabilisticSharpe, expectedMaxSharpe,
   // factor evaluation
-  netReturns, evaluateFactors, FACTORS,
+  netReturns, evaluateFactors, buildFeatureRows, FACTORS,
 };

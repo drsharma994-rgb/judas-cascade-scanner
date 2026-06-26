@@ -14,9 +14,10 @@ const path = require("path");
 const { execFile } = require("child_process");
 const {
   DEFAULT_BASE, GATE_LABELS, DeltaPublic, scan, marketRegime, formatScan, buildConfig,
-  btcRegimeAlign, betaGate,
+  btcRegimeAlign, betaGate, emaSeries, rsiSeries, cusumRegime,
 } = require("./scanner");
 const tradelog = require("./tradelog");
+const factorlab = require("./factorlab");
 
 const app = express();
 app.use(express.json({ limit: "256kb" }));
@@ -59,8 +60,10 @@ const tradelogLimiter = rateLimit(20, 60 * 1000); // /api/tradelog/* ~20 req/min
 // than the read-only GETs in the same namespace. Applied per-route below; the
 // in-process cron resolver calls tradelog.resolveOpen directly and is unaffected.
 const mutationLimiter = rateLimit(3, 60 * 1000); // ~3 mutating POSTs/min/IP
+const factorlabLimiter = rateLimit(6, 60 * 1000); // /api/factorlab ~6 req/min/IP (one candle fetch each)
 app.use("/api/scan", scanLimiter);
 app.use("/api/telegram", telegramLimiter);
+app.use("/api/factorlab", factorlabLimiter);
 app.use("/api/tradelog", tradelogLimiter);
 app.use("/api/log", tradelogLimiter); // backwards-compat alias namespace
 
@@ -530,10 +533,41 @@ function handleExpectancy(req, res) {
   }
 }
 
-// Shadow position-sizing backtest (pure analysis; no live sizing changed, no TP
-// moved). Optional query overrides: base_risk_pct, kelly_fraction, kelly_cap,
-// tier_min_n. e.g. /api/tradelog/sizing?base_risk_pct=1&kelly_fraction=0.25
-function handleSizing(req, res) {
+// Factor evaluation over live Delta candles for ONE symbol. Pure analysis: one
+// public candle fetch, deflated-Sharpe out-of-sample, no orders. Query params:
+// symbol (required), resolution (default 1h), bars (default 500), ema_fast,
+// ema_slow, train_frac, dsr_threshold.
+// e.g. /api/factorlab?symbol=BTCUSD&resolution=1h&bars=500
+async function handleFactorlab(req, res) {
+  try {
+    const q = req.query || {};
+    const symbol = String(q.symbol || "").toUpperCase().trim();
+    if (!symbol) return res.status(400).json({ ok: false, error: "symbol required" });
+    const resolution = String(q.resolution || "1h");
+    const bars = Math.max(120, Math.min(2000, parseInt(q.bars, 10) || 500));
+    const cfg = buildConfig({});
+    const client = new DeltaPublic(cfg);
+    const candles = await client.candles(symbol, resolution, bars);
+    if (!candles || candles.length < 120) {
+      return res.status(404).json({ ok: false, error: `no/insufficient candles for ${symbol} @ ${resolution}` });
+    }
+    const numq = (v) => (v != null && Number.isFinite(parseFloat(v)) ? parseFloat(v) : undefined);
+    const buildOpt = {};
+    if (numq(q.ema_fast) !== undefined) buildOpt.ema_fast = numq(q.ema_fast);
+    if (numq(q.ema_slow) !== undefined) buildOpt.ema_slow = numq(q.ema_slow);
+    const rows = factorlab.buildFeatureRows(
+      candles,
+      { emaSeries, rsiSeries, cusumRegime },
+      buildOpt);
+    const evalOpt = {};
+    if (numq(q.train_frac) !== undefined) evalOpt.train_frac = numq(q.train_frac);
+    if (numq(q.dsr_threshold) !== undefined) evalOpt.dsr_threshold = numq(q.dsr_threshold);
+    const out = factorlab.evaluateFactors(rows, factorlab.FACTORS, evalOpt);
+    res.json(Object.assign({ ok: true, symbol, resolution, bars: candles.length }, out));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+}
   try {
     const q = req.query || {};
     const numq = (v) => (v != null && Number.isFinite(parseFloat(v)) ? parseFloat(v) : undefined);
@@ -578,6 +612,7 @@ async function handleResolve(req, res) {
 // Canonical (UI) routes.
 app.get("/api/tradelog/expectancy", handleExpectancy);
 app.get("/api/tradelog/sizing", handleSizing);
+app.get("/api/factorlab", handleFactorlab);
 app.get("/api/tradelog/recent", handleRecent);
 app.post("/api/tradelog/resolve", mutationLimiter, handleResolve);
 // Legacy aliases (reference compat): /api/log -> expectancy, /api/log/raw ->

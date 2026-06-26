@@ -1068,4 +1068,5 @@ module.exports = {
   DeltaPublic, analyze, scan, marketRegime, selectUniverse, formatScan, fmtPrice,
   buildConfig, allTimeframes, structuralTarget,
   classifyFunding, fundingSignalFor, exposureGroup, btcRegimeAlign, betaGate, execStatusBase,
+  emaSeries, emaLast, rsiSeries, cusumRegime,
 };
