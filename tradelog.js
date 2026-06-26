@@ -412,6 +412,175 @@ function expectancy(opt, file) {
 }
 
 /* --------------------------------------------------------------------------
+ * sizingShadow(opt, file)
+ * SHADOW position-sizing backtest. PURE ANALYSIS: it writes nothing, changes no
+ * live sizing, and never moves a TP — so the fixed-RR outcome sample stays
+ * uncontaminated. It replays CLOSED records chronologically, holding each
+ * trade's realized R constant and varying only the SIZE MULTIPLIER on base risk:
+ *
+ *   fixed         — 1.0x on every taken trade (the actual baseline).
+ *   step_up       — discrete multiplier by edge tier; negative tiers -> 0x.
+ *   quarter_kelly — per-tier continuous-Kelly leverage (kelly_fraction * mu/var
+ *                   of R), hard-capped, computed WALK-FORWARD (expanding window)
+ *                   so the reported curve is NOT fit and scored on the same
+ *                   trades. An in_sample figure is also returned but flagged
+ *                   OPTIMISTIC because its fractions are fit on the full sample.
+ *
+ * Tiers encode the operator's own measured edge concentration (family agreement
+ * x R:R), where 3/4+ with R:R>=2 carries the edge and the 1-2/4 tiers are net
+ * losers. Nothing here is financial advice, a guarantee, or a live order.
+ * ------------------------------------------------------------------------ */
+function sizingTier(rec) {
+  const fam = Number.isFinite(+rec.familyScore) ? +rec.familyScore : null;
+  const rr  = Number.isFinite(+rec.rr) ? +rec.rr : null;
+  if (fam == null) return "unscored";
+  if (fam >= 3 && rr != null && rr >= 2) return "A"; // strongest measured tier
+  if (fam >= 3) return "B";                          // 3/4+ agreement, R:R < 2
+  if (fam === 2) return "C";                         // measured net-negative
+  return "D";                                        // <=1 family, net-negative
+}
+
+// Realized R actually experienced: the traded plan, falling back to fixed then
+// structural. Sizing only scales this; it never alters which R was realized.
+function realizedR(rec) {
+  if (Number.isFinite(rec.tradedR)) return rec.tradedR;
+  if (Number.isFinite(rec.fixedR)) return rec.fixedR;
+  if (Number.isFinite(rec.R)) return rec.R;
+  return null;
+}
+
+function varianceOf(arr, mu) {
+  if (arr.length < 2) return null;
+  const m = mu == null ? arr.reduce((a, b) => a + b, 0) / arr.length : mu;
+  return arr.reduce((a, b) => a + (b - m) * (b - m), 0) / (arr.length - 1);
+}
+
+// Continuous-Kelly leverage on base risk: f ~= kfrac * mu/var of per-trade R.
+// Returns null when the tier sample is too thin or has no dispersion (so the
+// caller can fall back to a prior instead of dividing by ~0).
+function kellyMult(rs, kfrac, kcap, tierMinN) {
+  if (rs.length < tierMinN) return null;
+  const mu = rs.reduce((a, b) => a + b, 0) / rs.length;
+  const v = varianceOf(rs, mu);
+  if (v == null || !(v > 0)) return null;
+  return Math.max(0, Math.min(kcap, kfrac * (mu / v)));
+}
+
+// Equity curve from a sequence of { mult, R }. Each trade risks baseRiskPct of
+// current equity at 1x, so geometric compounding exposes Kelly's drawdown cost.
+function equityCurve(seq, baseRiskPct) {
+  let eq = 1, peak = 1, maxDD = 0, sumWR = 0;
+  for (const { mult, R } of seq) {
+    const wR = mult * R;
+    sumWR += wR;
+    eq *= (1 + (baseRiskPct / 100) * wR);
+    if (eq > peak) peak = eq;
+    const dd = peak > 0 ? (eq - peak) / peak : 0;
+    if (dd < maxDD) maxDD = dd;
+  }
+  const n = seq.length;
+  return {
+    n,
+    total_weighted_R: round4(sumWR),
+    mean_weighted_R: n ? round4(sumWR / n) : null,
+    final_equity_x: round4(eq),
+    max_drawdown_pct: round4(maxDD * 100),
+  };
+}
+
+function sizingShadow(opt, file) {
+  const o = Object.assign({}, DEFAULTS, opt || {});
+  const baseRiskPct = Number.isFinite(+o.base_risk_pct) ? +o.base_risk_pct : 1.0;
+  const kfrac = Number.isFinite(+o.kelly_fraction) ? +o.kelly_fraction : 0.25;
+  const kcap = Number.isFinite(+o.kelly_cap) ? +o.kelly_cap : 2.0;
+  const tierMinN = Number.isFinite(+o.tier_min_n) ? +o.tier_min_n : 20;
+  // Discrete step-up multipliers by tier (negative tiers are skipped).
+  const STEP = Object.assign(
+    { A: 1.5, B: 1.0, C: 0, D: 0, unscored: 0 },
+    (o.step_mult && typeof o.step_mult === "object") ? o.step_mult : {});
+
+  const records = reconcile(file);
+  const closed = records
+    .filter(r => r.status === "CLOSED" && realizedR(r) != null)
+    .sort((a, b) => String(a.ts).localeCompare(String(b.ts))); // chronological
+
+  // Pre-tag each trade with its tier and realized R.
+  const trades = closed.map(r => ({ tier: sizingTier(r), R: realizedR(r) }));
+
+  // In-sample per-tier stats (fit on the FULL sample — optimistic by design).
+  const tierR = {};
+  for (const t of trades) (tierR[t.tier] = tierR[t.tier] || []).push(t.R);
+  const tierStats = {};
+  for (const k of Object.keys(tierR)) {
+    const rs = tierR[k];
+    const mu = rs.reduce((a, b) => a + b, 0) / rs.length;
+    const v = varianceOf(rs, mu);
+    tierStats[k] = {
+      n: rs.length,
+      mean_R: round4(mu),
+      variance_R: v == null ? null : round4(v),
+      step_mult: STEP[k] != null ? STEP[k] : 0,
+      kelly_mult_in_sample: kellyMult(rs, kfrac, kcap, tierMinN),
+    };
+  }
+
+  // Build the three sequences. quarter_kelly is WALK-FORWARD: each trade is
+  // sized from only the prior trades in its tier (expanding window); before a
+  // tier reaches tier_min_n we fall back to its step_up multiplier as a prior.
+  const seqFixed = [], seqStep = [], seqKellyWF = [], seqKellyIS = [];
+  const seen = {}; // per-tier history accumulated walk-forward
+  let warmupTrades = 0;
+  for (const t of trades) {
+    const stepMult = STEP[t.tier] != null ? STEP[t.tier] : 0;
+    seqFixed.push({ mult: 1.0, R: t.R });
+    seqStep.push({ mult: stepMult, R: t.R });
+
+    const hist = seen[t.tier] || (seen[t.tier] = []);
+    const wf = kellyMult(hist, kfrac, kcap, tierMinN);
+    if (wf == null) warmupTrades++;
+    seqKellyWF.push({ mult: wf == null ? stepMult : wf, R: t.R });
+    hist.push(t.R); // update AFTER sizing this trade
+
+    const isMult = tierStats[t.tier] && tierStats[t.tier].kelly_mult_in_sample != null
+      ? tierStats[t.tier].kelly_mult_in_sample : stepMult;
+    seqKellyIS.push({ mult: isMult, R: t.R });
+  }
+
+  const minN = o.min_n;
+  const verdict_ready = closed.length >= minN;
+  return {
+    file: file || DEFAULT_FILE,
+    closed: closed.length,
+    min_n: minN,
+    verdict_ready,
+    base_risk_pct: baseRiskPct,
+    kelly_fraction: kfrac,
+    kelly_cap: kcap,
+    tier_min_n: tierMinN,
+    tier_definitions: {
+      A: "familyScore>=3 AND R:R>=2 (strongest measured tier)",
+      B: "familyScore>=3, R:R<2",
+      C: "familyScore==2 (measured net-negative)",
+      D: "familyScore<=1 (measured net-negative)",
+      unscored: "no familyScore on record",
+    },
+    tier_stats: tierStats,
+    schemes: {
+      fixed: equityCurve(seqFixed, baseRiskPct),
+      step_up: equityCurve(seqStep, baseRiskPct),
+      quarter_kelly_walk_forward: equityCurve(seqKellyWF, baseRiskPct),
+      quarter_kelly_in_sample: equityCurve(seqKellyIS, baseRiskPct),
+    },
+    walk_forward_warmup_trades: warmupTrades,
+    note: verdict_ready
+      ? "Shadow only — no live sizing changed, no TP moved. Use walk_forward as the honest read; in_sample is optimistic (fit on the same trades it scores)."
+      : `Provisional — ${closed.length}/${minN} resolved trades. Sizing edges are unreliable below min_n; treat all schemes as directional, not a verdict.`,
+    not_financial_advice: true,
+    generated_at: new Date().toISOString(),
+  };
+}
+
+/* --------------------------------------------------------------------------
  * recent(limit, file) — reconciled logical records, newest first.
  * ------------------------------------------------------------------------ */
 function recent(limit, file) {
@@ -424,5 +593,5 @@ function recent(limit, file) {
 module.exports = {
   DEFAULT_FILE, DEFAULTS,
   logSetup, tripleBarrier, resolveOpen, expectancy, recent,
-  reconcile, setupId, readEvents,
+  sizingShadow, reconcile, setupId, readEvents,
 };

@@ -530,6 +530,24 @@ function handleExpectancy(req, res) {
   }
 }
 
+// Shadow position-sizing backtest (pure analysis; no live sizing changed, no TP
+// moved). Optional query overrides: base_risk_pct, kelly_fraction, kelly_cap,
+// tier_min_n. e.g. /api/tradelog/sizing?base_risk_pct=1&kelly_fraction=0.25
+function handleSizing(req, res) {
+  try {
+    const q = req.query || {};
+    const numq = (v) => (v != null && Number.isFinite(parseFloat(v)) ? parseFloat(v) : undefined);
+    const opt = {};
+    if (numq(q.base_risk_pct) !== undefined) opt.base_risk_pct = numq(q.base_risk_pct);
+    if (numq(q.kelly_fraction) !== undefined) opt.kelly_fraction = numq(q.kelly_fraction);
+    if (numq(q.kelly_cap) !== undefined) opt.kelly_cap = numq(q.kelly_cap);
+    if (numq(q.tier_min_n) !== undefined) opt.tier_min_n = numq(q.tier_min_n);
+    res.json(Object.assign({ ok: true }, tradelog.sizingShadow(opt)));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e && e.message || e) });
+  }
+}
+
 // recent?limit=50 — reconciled records, newest first.
 function handleRecent(req, res) {
   try {
@@ -559,6 +577,7 @@ async function handleResolve(req, res) {
 
 // Canonical (UI) routes.
 app.get("/api/tradelog/expectancy", handleExpectancy);
+app.get("/api/tradelog/sizing", handleSizing);
 app.get("/api/tradelog/recent", handleRecent);
 app.post("/api/tradelog/resolve", mutationLimiter, handleResolve);
 // Legacy aliases (reference compat): /api/log -> expectancy, /api/log/raw ->
