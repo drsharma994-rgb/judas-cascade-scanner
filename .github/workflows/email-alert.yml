@@ -29,9 +29,10 @@ jobs:
 
       - name: Scan for CLEAN setups
         id: scan
+        run: node scripts/alert-scan.js
         env:
           ALERT_COOLDOWN_HOURS: "4"
-        run: node alert-scan.js
+     
 
       - name: Email on CLEAN setup
         if: steps.scan.outputs.has_setup == 'true'
