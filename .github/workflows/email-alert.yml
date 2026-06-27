@@ -32,6 +32,8 @@ jobs:
         run: node scripts/alert-scan.js
         env:
           ALERT_COOLDOWN_HOURS: "4"
+          run: node alert-scan.js
+
      
 
       - name: Email on CLEAN setup
