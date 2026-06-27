@@ -36,13 +36,16 @@ jobs:
           key: alert-state-${{ github.run_id }}
           restore-keys: |
             alert-state-
-
       - name: Scan for CLEAN setups
-        id: scan
-        env:
-          ALERT_COOLDOWN_HOURS: "4"
-        run: node alert-scan.js
-
+        run: |
+          echo "=== Checking current directory ==="
+          pwd
+          echo "=== Listing files in this directory ==="
+          ls -R
+          echo "=== Running the script ==="
+          node alert-scan.js
+          
+  
       - name: Email on CLEAN setup
         if: steps.scan.outputs.has_setup == 'true'
         uses: dawidd6/action-send-mail@v3
