@@ -98,4 +98,4 @@ function fmt(v, d) { return (v == null || isNaN(+v)) ? "—" : (+v).toLocaleStri
     console.error("alert-scan error:", (e && e.message) || e);
     process.exit(0);
   }
-};
+})();
