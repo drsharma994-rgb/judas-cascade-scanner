@@ -18,6 +18,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm' # Automatically caches your packages for faster runs
           
       - name: Restore cooldown state
         uses: actions/cache@v4
@@ -26,6 +27,9 @@ jobs:
           key: alert-state-${{ github.run_id }}
           restore-keys: |
             alert-state-
+            
+      - name: Install dependencies
+        run: npm ci # <-- This installs everything from your package-lock.json as shown in image_7dbd9f.png
             
       - name: Scan for CLEAN setups
         id: scan
