@@ -28,10 +28,10 @@ jobs:
             alert-state-
             
       - name: Scan for CLEAN setups
-        id: scan  # <-- Added this so the email step can read your script's outputs
+        id: scan
         env:
           ALERT_COOLDOWN_HOURS: "4"
-        run: node .github/workflows/alert-scan.js # <-- Correct path to your script
+        run: node alert-scan.js
         
       - name: Email on CLEAN setup
         if: steps.scan.outputs.has_setup == 'true'
