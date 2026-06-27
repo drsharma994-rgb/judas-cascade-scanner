@@ -36,14 +36,10 @@ jobs:
           key: alert-state-${{ github.run_id }}
           restore-keys: |
             alert-state-
+     
       - name: Scan for CLEAN setups
-        run: |
-          echo "=== Checking current directory ==="
-          pwd
-          echo "=== Listing files in this directory ==="
-          ls -R
-          echo "=== Running the script ==="
-          node alert-scan.js
+       working-directory: .github/workflows/email-alert.yml  # <-- Change this to your subfolder name
+        run: node alert-scan.js
           
   
       - name: Email on CLEAN setup
