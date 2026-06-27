@@ -1,0 +1,57 @@
+# Telegram alert when a CLEAN four-family setup forms on live Delta data.
+# SELF-CONTAINED: the scan script is embedded (base64) and written at runtime,
+# so it does NOT require alert-scan.js to be committed. Uses your scanner.js
+# (already in the repo). SCAN-ONLY, no orders.
+# Needs two repo secrets (Settings -> Secrets and variables -> Actions):
+#   TELEGRAM_TOKEN     bot token from @BotFather
+#   TELEGRAM_CHAT_ID   your chat id (from @userinfobot, or getUpdates)
+name: telegram-alert
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: telegram-alert
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Restore cooldown state
+        uses: actions/cache@v4
+        with:
+          path: .alert-state.json
+          key: tg-alert-state-${{ github.run_id }}
+          restore-keys: |
+            tg-alert-state-
+      - name: Scan for CLEAN setups
+        id: scan
+        env:
+          ALERT_COOLDOWN_HOURS: "4"
+          ALERT_SCRIPT_B64: "InVzZSBzdHJpY3QiOwovKiA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CiAqIGFsZXJ0LXNjYW4uanMg4oCUIHNjaGVkdWxlZCBDTEVBTi1zZXR1cCBkZXRlY3RvciBmb3IgdGhlIGVtYWlsIGFsZXJ0ZXIuCiAqCiAqIFJldXNlcyB0aGUgU0FNRSBzY2FubmVyIHRoZSBhcHAgdXNlcyAobm8gZGl2ZXJnZW5jZSkuIFJ1bnMgT05FIGxpdmUgc2NhbiBvZgogKiBEZWx0YSBJbmRpYSBwdWJsaWMgZGF0YSwgZmluZHMgc2V0dXBzIHRoYXQgcGFzcyBhbGwgZm91ciBmYW1pbGllcyAoY29yZVBhc3MpCiAqIGFuZCBhcmVuJ3QgYmV0YS1ibG9ja2VkLCBhbmQg4oCUIGZvciBhbnkgdGhhdCBhcmUgTk9UIG9uIGNvb2xkb3duIOKAlCB3cml0ZXMKICogR2l0SHViIEFjdGlvbnMgb3V0cHV0cyAoaGFzX3NldHVwIC8gc3ViamVjdCAvIGJvZHkpIHNvIHRoZSB3b3JrZmxvdyBjYW4gZW1haWwuCiAqCiAqIFB1YmxpYyBEZWx0YSBkYXRhIG9ubHkuIFNDQU4tT05MWTogaXQgbmV2ZXIgcGxhY2VzIGFuIG9yZGVyLCBuZXZlciB0b3VjaGVzIGEKICogcHJpdmF0ZSBhY2NvdW50LCBuZXZlciBoYW5kbGVzIGEgY3JlZGVudGlhbC4gVGhlIGVtYWlsIHNlbmQgaGFwcGVucyBpbiB0aGUKICogd29ya2Zsb3cgdmlhIHlvdXIgb3duIEdtYWlsIEFwcCBQYXNzd29yZCBzdG9yZWQgYXMgYSBHaXRIdWIgc2VjcmV0LgogKgogKiBDb29sZG93bjogYSBzbWFsbCBKU09OIHN0YXRlIGZpbGUgKHBlcnNpc3RlZCBiZXR3ZWVuIHJ1bnMgdmlhIGFjdGlvbnMvY2FjaGUpCiAqIHJlY29yZHMgd2hlbiBlYWNoIHN5bXxkaXIgd2FzIGxhc3QgYWxlcnRlZCwgc28gdGhlIHNhbWUgc2V0dXAgaXMgbm90IGVtYWlsZWQKICogYWdhaW4gd2l0aGluIEFMRVJUX0NPT0xET1dOX0hPVVJTLiBOb3RoaW5nIGhlcmUgaXMgZmluYW5jaWFsIGFkdmljZS4KICogPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0gKi8KY29uc3QgZnMgPSByZXF1aXJlKCJmcyIpOwpjb25zdCB7IERlbHRhUHVibGljLCBzY2FuLCBidWlsZENvbmZpZywgbWFya2V0UmVnaW1lLCBidGNSZWdpbWVBbGlnbiwgYmV0YUdhdGUgfSA9IHJlcXVpcmUoIi4vc2Nhbm5lci5qcyIpOwoKY29uc3QgU1RBVEVfRklMRSA9IHByb2Nlc3MuZW52LkFMRVJUX1NUQVRFX0ZJTEUgfHwgIi5hbGVydC1zdGF0ZS5qc29uIjsKY29uc3QgQ09PTERPV05fSE9VUlMgPSBwYXJzZUZsb2F0KHByb2Nlc3MuZW52LkFMRVJUX0NPT0xET1dOX0hPVVJTIHx8ICI0IikgfHwgNDsKCmZ1bmN0aW9uIHJlYWRTdGF0ZSgpIHsgdHJ5IHsgcmV0dXJuIEpTT04ucGFyc2UoZnMucmVhZEZpbGVTeW5jKFNUQVRFX0ZJTEUsICJ1dGY4IikpIHx8IHt9OyB9IGNhdGNoIChfKSB7IHJldHVybiB7fTsgfSB9CmZ1bmN0aW9uIHdyaXRlU3RhdGUocykgeyB0cnkgeyBmcy53cml0ZUZpbGVTeW5jKFNUQVRFX0ZJTEUsIEpTT04uc3RyaW5naWZ5KHMpKTsgfSBjYXRjaCAoXykgeyAvKiBub29wICovIH0gfQoKLy8gV3JpdGUgYSBHaXRIdWIgQWN0aW9ucyBzdGVwIG91dHB1dCAobXVsdGlsaW5lLXNhZmUpLCBvciBwcmludCBsb2NhbGx5LgpmdW5jdGlvbiBzZXRPdXRwdXQoa2V5LCB2YWx1ZSkgewogIGNvbnN0IGYgPSBwcm9jZXNzLmVudi5HSVRIVUJfT1VUUFVUOwogIGNvbnN0IHYgPSBTdHJpbmcodmFsdWUgPT0gbnVsbCA/ICIiIDogdmFsdWUpOwogIGlmIChmKSB7IGZzLmFwcGVuZEZpbGVTeW5jKGYsIGAke2tleX08PF9fQUxFUlRfRU9GX19cbiR7dn1cbl9fQUxFUlRfRU9GX19cbmApOyB9CiAgZWxzZSB7IGNvbnNvbGUubG9nKGBbb3V0cHV0XSAke2tleX09JHt2LnJlcGxhY2UoL1xuL2csICJcXG4iKX1gKTsgfQp9CgpmdW5jdGlvbiBmbXQodiwgZCkgeyByZXR1cm4gKHYgPT0gbnVsbCB8fCBpc05hTigrdikpID8gIuKAlCIgOiAoK3YpLnRvTG9jYWxlU3RyaW5nKCJlbi1VUyIsIHsgbWF4aW11bUZyYWN0aW9uRGlnaXRzOiAoZCA9PSBudWxsID8gNiA6IGQpIH0pOyB9CgooYXN5bmMgKCkgPT4gewogIHRyeSB7CiAgICBjb25zdCBjZmcgPSBidWlsZENvbmZpZyh7fSk7CiAgICBjb25zdCBjbGllbnQgPSBuZXcgRGVsdGFQdWJsaWMoY2ZnKTsKICAgIGNvbnN0IHJlc3VsdHMgPSBhd2FpdCBzY2FuKGNmZywgY2xpZW50KTsKCiAgICBsZXQgcmVnaW1lOwogICAgdHJ5IHsgcmVnaW1lID0gYXdhaXQgbWFya2V0UmVnaW1lKGNsaWVudCwgY2ZnKTsgfSBjYXRjaCAoXykgeyByZWdpbWUgPSB7IGF2YWlsYWJsZTogZmFsc2UgfTsgfQogICAgZm9yIChjb25zdCByIG9mIHJlc3VsdHMpIHsKICAgICAgaWYgKCFyIHx8IHIuZXJyKSBjb250aW51ZTsKICAgICAgci5idGNSZWdpbWVBbGlnbiA9IGJ0Y1JlZ2ltZUFsaWduKHJlZ2ltZSwgci5kaXIpOwogICAgICByLmJldGFHYXRlID0gYmV0YUdhdGUocmVnaW1lLCByLmRpciwgci5jb3JyZWxhdGVkRXhwb3N1cmVHcm91cCk7CiAgICAgIGlmIChyLmJldGFHYXRlID09PSAiYmxvY2siKSByLmV4ZWN1dGlvblN0YXR1cyA9ICJBVk9JRCI7CiAgICB9CgogICAgLy8gSG9uZXN0IENMRUFOIHNldDogYWxsIGZvdXIgZmFtaWxpZXMgcGFzcywgbm90IGJldGEtYmxvY2tlZC4gU2FtZSByYW5raW5nCiAgICAvLyB0aGUgc2Nhbm5lci9hcHAgdXNlcy4KICAgIGNvbnN0IGNsZWFuID0gcmVzdWx0cwogICAgICAuZmlsdGVyKHIgPT4gciAmJiAhci5lcnIgJiYgci5jb3JlUGFzcyAmJiByLmV4ZWN1dGlvblN0YXR1cyAhPT0gIkFWT0lEIikKICAgICAgLnNvcnQoKGEsIGIpID0+IChiLmZhbWlseVNjb3JlIC0gYS5mYW1pbHlTY29yZSkgfHwgKGIuc2NvcmU0IC0gYS5zY29yZTQpKTsKCiAgICBjb25zdCBub3cgPSBEYXRlLm5vdygpOwogICAgY29uc3Qgc3RhdGUgPSByZWFkU3RhdGUoKTsKICAgIGZvciAoY29uc3QgayBvZiBPYmplY3Qua2V5cyhzdGF0ZSkpIHsKICAgICAgaWYgKG5vdyAtIHN0YXRlW2tdID4gQ09PTERPV05fSE9VUlMgKiAzNjAwICogMTAwMCkgZGVsZXRlIHN0YXRlW2tdOyAvLyBleHBpcmUKICAgIH0KICAgIGNvbnN0IGZyZXNoID0gY2xlYW4uZmlsdGVyKHIgPT4gIXN0YXRlW2Ake3Iuc3ltfXwke3IuZGlyfWBdKTsKCiAgICBpZiAoIWZyZXNoLmxlbmd0aCkgewogICAgICBzZXRPdXRwdXQoImhhc19zZXR1cCIsICJmYWxzZSIpOwogICAgICB3cml0ZVN0YXRlKHN0YXRlKTsKICAgICAgY29uc29sZS5sb2coYE5vIGZyZXNoIENMRUFOIHNldHVwcyAoY2xlYW49JHtjbGVhbi5sZW5ndGh9LCBhbGwgb24gY29vbGRvd24gb3Igbm9uZSkuYCk7CiAgICAgIHJldHVybjsKICAgIH0KCiAgICBmb3IgKGNvbnN0IHIgb2YgZnJlc2gpIHN0YXRlW2Ake3Iuc3ltfXwke3IuZGlyfWBdID0gbm93OwogICAgd3JpdGVTdGF0ZShzdGF0ZSk7CgogICAgY29uc3QgbGluZXMgPSBmcmVzaC5tYXAociA9PgogICAgICBgJHtyLnN5bX0gJHtTdHJpbmcoci5kaXIgfHwgIiIpLnRvVXBwZXJDYXNlKCl9ICB8ICA0LWZhbWlseSAke3IuZmFtaWx5U2NvcmV9LzQgIHwgIGAgKwogICAgICBgZW50cnkgJHtmbXQoci5lbnRyeSl9ICBzdG9wICR7Zm10KHIuc3RvcCl9ICB0YXJnZXQgJHtmbXQoci50YXJnZXQpfSAgUjpSICR7Zm10KHIucnIsIDIpfSAgfCAgYCArCiAgICAgIGAke3IuZXhlY3V0aW9uU3RhdHVzIHx8ICIifSR7ci5idGNSZWdpbWVBbGlnbiA/ICIgIMK3IEJUQyAiICsgci5idGNSZWdpbWVBbGlnbiA6ICIifWApOwoKICAgIGNvbnN0IHN1YmplY3QgPSBgRGVsdGEgc2Nhbm5lcjogJHtmcmVzaC5sZW5ndGh9IENMRUFOIHNldHVwJHtmcmVzaC5sZW5ndGggPiAxID8gInMiIDogIiJ9ICgke2ZyZXNoLm1hcChyID0+IHIuc3ltKS5qb2luKCIsICIpfSlgOwogICAgY29uc3QgYm9keSA9IFsKICAgICAgIkRlbHRhIFNjYW5uZXIg4oCUIENMRUFOIGZvdXItZmFtaWx5IHNldHVwKHMpIGRldGVjdGVkIG9uIGxpdmUgRGVsdGEgSW5kaWEgZGF0YS4iLAogICAgICAiIiwKICAgICAgLi4ubGluZXMsCiAgICAgICIiLAogICAgICAiU3RvcHMvdGFyZ2V0cyBhcmUgc3RydWN0dXJhbCBsZXZlbHMgZnJvbSB0aGUgc2NhbiAoc3RvcCBhdCBpbnZhbGlkYXRpb24sIG5vdCByZXZlcnNlLWVuZ2luZWVyZWQgdG8gYSByYXRpbykuIiwKICAgICAgIlNjYW4tb25seSDigJQgbm8gb3JkZXIgd2FzIHBsYWNlZC4gTm90IGZpbmFuY2lhbCBhZHZpY2UuIFZlcmlmeSBvbiBEZWx0YSBiZWZvcmUgYWN0aW5nLiIsCiAgICAgIGBEZXRlY3RlZCAke25ldyBEYXRlKCkudG9JU09TdHJpbmcoKX0uYCwKICAgIF0uam9pbigiXG4iKTsKCiAgICBzZXRPdXRwdXQoImhhc19zZXR1cCIsICJ0cnVlIik7CiAgICBzZXRPdXRwdXQoInN1YmplY3QiLCBzdWJqZWN0KTsKICAgIHNldE91dHB1dCgiYm9keSIsIGJvZHkpOwogICAgY29uc29sZS5sb2coYEZyZXNoIENMRUFOIHNldHVwczogJHtmcmVzaC5sZW5ndGh9IC0+IGVtYWlsaW5nLmApOwogIH0gY2F0Y2ggKGUpIHsKICAgIC8vIE5ldmVyIGZhaWwgdGhlIHdvcmtmbG93IG9uIGEgdHJhbnNpZW50IHNjYW4vbmV0d29yayBlcnJvciDigJQganVzdCBza2lwLgogICAgc2V0T3V0cHV0KCJoYXNfc2V0dXAiLCAiZmFsc2UiKTsKICAgIGNvbnNvbGUuZXJyb3IoImFsZXJ0LXNjYW4gZXJyb3I6IiwgKGUgJiYgZS5tZXNzYWdlKSB8fCBlKTsKICAgIHByb2Nlc3MuZXhpdCgwKTsKICB9Cn0pKCk7Cg=="
+        run: |
+          echo "$ALERT_SCRIPT_B64" | base64 -d > alert-scan.js
+          node alert-scan.js
+      - name: Telegram on CLEAN setup
+        if: steps.scan.outputs.has_setup == 'true'
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SUBJECT: ${{ steps.scan.outputs.subject }}
+          BODY: ${{ steps.scan.outputs.body }}
+        run: |
+          printf '%s\n\n%s' "$SUBJECT" "$BODY" > msg.txt
+          RESP=$(curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+            -d chat_id="${TG_CHAT}" \
+            --data-urlencode "text@msg.txt" \
+            -d disable_web_page_preview=true)
+          echo "$RESP"
+          echo "$RESP" | grep -q '"ok":true' || { echo "Telegram send failed (check TELEGRAM_TOKEN / TELEGRAM_CHAT_ID)"; exit 1; }
+          echo "Telegram alert sent."
