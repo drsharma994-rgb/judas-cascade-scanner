@@ -29,7 +29,7 @@ jobs:
 
       - name: Scan for CLEAN setups
         id: scan
-        run: node scripts/alert-scan.js
+        run: node workflow/alert-scan.js
         env:
           ALERT_COOLDOWN_HOURS: "4"
           run: node alert-scan.js
