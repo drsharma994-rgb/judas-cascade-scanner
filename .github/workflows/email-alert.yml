@@ -12,14 +12,17 @@ concurrency:
 jobs:
   alert:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-node@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm' # Automatically caches your packages for faster runs
-          
+          node-version: 20
+          cache: npm
+
       - name: Restore cooldown state
         uses: actions/cache@v4
         with:
@@ -27,17 +30,22 @@ jobs:
           key: alert-state-${{ github.run_id }}
           restore-keys: |
             alert-state-
-            
+
       - name: Install dependencies
-        run: npm ci # <-- This installs everything from your package-lock.json as shown in image_7dbd9f.png
-            
-      - name: Scan for CLEAN setups
+        run: npm ci
+
+      - name: Verify files
+        run: |
+          pwd
+          ls -R
+
+      - name: Run scanner
         id: scan
         env:
           ALERT_COOLDOWN_HOURS: "4"
-        run: node alert-scan.js
-        
-      - name: Email on CLEAN setup
+        run: node .github/workflows/alert-scan.js
+
+      - name: Send email
         if: steps.scan.outputs.has_setup == 'true'
         uses: dawidd6/action-send-mail@v3
         with:
