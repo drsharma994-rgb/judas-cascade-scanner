@@ -606,6 +606,7 @@ async function handleFactorlabSweep(req, res) {
           cells.push({
             key: `${symbol}|${resolution}|${factor}`, symbol, resolution, factor,
             is: fr.perFactor[factor].is, oos: fr.perFactor[factor].oos,
+            oosRegimes: fr.perFactor[factor].oosRegimes,
           });
         }
       }

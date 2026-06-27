@@ -268,8 +268,11 @@ function oosFactorReturns(rows, factors, opt) {
   const testRows = clean.slice(split);
   const leg = (rs) => { const fwd = rs.map(r => r.fwdRet); return (fn) => netReturns(rs.map(fn), fwd, o); };
   const trainLeg = leg(trainRows), testLeg = leg(testRows);
+  const testRegimes = testRows.map(r => r.regime || "UNKNOWN");
   const perFactor = {};
-  for (const name of Object.keys(facs)) perFactor[name] = { is: trainLeg(facs[name]), oos: testLeg(facs[name]) };
+  for (const name of Object.keys(facs)) {
+    perFactor[name] = { is: trainLeg(facs[name]), oos: testLeg(facs[name]), oosRegimes: testRegimes };
+  }
   return { perFactor, n_total: clean.length, n_train: trainRows.length, n_test: testRows.length };
 }
 
@@ -326,6 +329,27 @@ function evaluatePooled(cells, opt) {
   };
   const by_resolution = groupSummary(r => r.resolution);
   const by_factor = groupSummary(r => r.factor);
+  // Regime split: does a factor's OOS edge concentrate in trend vs chop? Pools
+  // each active cell's OOS returns, bucketed by the (causal) regime of each bar.
+  const byRegimeAll = {}, byRegimeFactor = {};
+  for (const c of enriched) {
+    if (!Number.isFinite(c.srOos)) continue; // active cells only
+    const oos = c.oos || [], regs = c.oosRegimes || [];
+    for (let k = 0; k < oos.length; k++) {
+      const reg = regs[k] || "UNKNOWN";
+      (byRegimeAll[reg] = byRegimeAll[reg] || []).push(oos[k]);
+      byRegimeFactor[c.factor] = byRegimeFactor[c.factor] || {};
+      (byRegimeFactor[c.factor][reg] = byRegimeFactor[c.factor][reg] || []).push(oos[k]);
+    }
+  }
+  const regSumm = (arr) => ({ n: arr.length, sharpe_oos: round4(sharpe(arr)), mean_oos: round4(mean(arr)) });
+  const by_regime = {};
+  for (const r of Object.keys(byRegimeAll)) by_regime[r] = regSumm(byRegimeAll[r]);
+  const by_regime_factor = {};
+  for (const f of Object.keys(byRegimeFactor)) {
+    by_regime_factor[f] = {};
+    for (const r of Object.keys(byRegimeFactor[f])) by_regime_factor[f][r] = regSumm(byRegimeFactor[f][r]);
+  }
   return {
     n_cells: enriched.length,
     n_active_trials: nTrials,
@@ -335,6 +359,8 @@ function evaluatePooled(cells, opt) {
     dsr_threshold: dsrThreshold,
     by_resolution,
     by_factor,
+    by_regime,
+    by_regime_factor,
     results,
     survivors: results.filter(r => r.survives).map(r => r.key),
     note: "Pooled across the whole sweep: the deflated-Sharpe bar accounts for EVERY " +
@@ -342,6 +368,41 @@ function evaluatePooled(cells, opt) {
       "Out-of-sample, fee-netted. Not financial advice.",
     generated_at: new Date().toISOString(),
   };
+}
+
+/* ---------- transparent market regime label (causal, no look-ahead) ----------
+ * Three legible states from rules, NOT a black-box HMM:
+ *   TREND_UP / TREND_DOWN — EMA(fast)-vs-EMA(slow) gap exceeds ~T bars of recent
+ *                           realized volatility (a trend big relative to noise).
+ *   CHOP                  — gap within the noise band.
+ * trendNorm = ((emaFast - emaSlow)/emaSlow) / rolling_vol(log returns). Each bar
+ * uses ONLY data up to that bar, so a row's regime never peeks at the future.
+ * ------------------------------------------------------------------------ */
+function computeRegimes(closes, emaF, emaS, opt) {
+  const o = opt || {};
+  const volN = Number.isFinite(o.regime_vol_n) ? o.regime_vol_n : 20;
+  const T = Number.isFinite(o.regime_trend_t) ? o.regime_trend_t : 1.0;
+  const n = closes.length;
+  const logret = new Array(n).fill(null);
+  for (let i = 1; i < n; i++) {
+    if (closes[i] > 0 && closes[i - 1] > 0) logret[i] = Math.log(closes[i] / closes[i - 1]);
+  }
+  const out = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    const ef = emaF[i], es = emaS[i];
+    if (!Number.isFinite(ef) || !Number.isFinite(es) || !(es > 0)) { out[i] = null; continue; }
+    const lo = Math.max(1, i - volN + 1);
+    let cnt = 0, m = 0;
+    for (let j = lo; j <= i; j++) { const x = logret[j]; if (Number.isFinite(x)) { cnt++; m += x; } }
+    if (cnt < 2) { out[i] = "CHOP"; continue; }
+    m /= cnt;
+    let s2 = 0;
+    for (let j = lo; j <= i; j++) { const x = logret[j]; if (Number.isFinite(x)) s2 += (x - m) * (x - m); }
+    const vol = Math.sqrt(s2 / (cnt - 1)) || 1e-9;
+    const trendNorm = ((ef - es) / es) / vol;
+    out[i] = trendNorm >= T ? "TREND_UP" : trendNorm <= -T ? "TREND_DOWN" : "CHOP";
+  }
+  return out;
 }
 
 /* ---------- candle -> feature rows adapter ----------
@@ -368,6 +429,7 @@ function buildFeatureRows(candles, deps, opt) {
   const emaF = (deps.emaSeries && deps.emaSeries(closes, fast)) || [];
   const emaS = (deps.emaSeries && deps.emaSeries(closes, slow)) || [];
   const rsiArr = (deps.rsiSeries && deps.rsiSeries(closes, rsiP)) || [];
+  const regimes = computeRegimes(closes, emaF, emaS, o);
   const rows = [];
   for (let i = 0; i < closes.length - 1; i++) { // -1: need a forward bar
     const rsi = rsiArr[i], ef = emaF[i], es = emaS[i];
@@ -382,7 +444,7 @@ function buildFeatureRows(candles, deps, opt) {
       const cr = deps.cusumRegime(win, cusumThr);
       cusumDir = Array.isArray(cr) ? cr[0] : "FLAT";
     }
-    rows.push({ t: candles[i].t, rsi, emaFast: ef, emaSlow: es, cusumDir, fundingZ: null, fwdRet });
+    rows.push({ t: candles[i].t, rsi, emaFast: ef, emaSlow: es, cusumDir, fundingZ: null, regime: regimes[i] || "CHOP", fwdRet });
   }
   return rows;
 }
