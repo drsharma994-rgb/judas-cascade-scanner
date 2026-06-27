@@ -1,5 +1,5 @@
 /* Delta Scanner v4 — minimal offline-first service worker */
-const CACHE = "delta-v4-18";
+const CACHE = "delta-v4-19";
 const ASSETS = ["./", "./index.html", "./app.js", "./manifest.webmanifest", "./favicon.svg", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (e) => {

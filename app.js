@@ -1756,6 +1756,66 @@
     </div>`;
   }
 
+  // Best Available: fetch the single top live 4-family setup (or a wait state)
+  // and render it from server-provided fields only (no client gateMap dependency).
+  function renderBest(r) {
+    const dirL = String(r.dir || "").toLowerCase();
+    const dirU = String(r.dir || "").toUpperCase();
+    const fmt = (v, d) => (v == null || isNaN(+v)) ? "—" : (+v).toLocaleString("en-US", { maximumFractionDigits: (d == null ? 6 : d) });
+    const fam = Number.isFinite(+r.familyScore) ? +r.familyScore : "—";
+    const exec = r.executionStatus
+      ? `<span class="hs ${r.executionStatus === "ENTER" ? "ok" : r.executionStatus === "AVOID" ? "bad" : "warn"}">${esc(r.executionStatus)}</span>` : "";
+    const fund = r.fundingSignal ? `<span class="hs">Funding <b>${esc(r.fundingSignal)}</b></span>` : "";
+    const align = r.btcRegimeAlign ? `<span class="hs">BTC regime <b>${esc(r.btcRegimeAlign)}</b></span>` : "";
+    const warn = r.correlatedExposureWarning ? `<div class="hswarn">⚠ ${esc(r.correlatedExposureWarning)}</div>` : "";
+    return `<div class="card ${dirL} ${r.corePass ? "pass" : ""}">
+      <div class="crow1">
+        <span class="sym">${esc(r.sym || "?")}</span>
+        <span class="dir ${dirL}">${dirU}</span>
+        <span class="scorebadge full">4-Family ${fam}/4</span>
+      </div>
+      <div class="honest">${exec} <span class="hs">Core <b>${r.corePass ? "PASS" : "—"}</b></span> ${fund} ${align}</div>
+      ${warn}
+      <div class="levels">
+        <span class="lk"><span class="lt">Entry</span><span class="lv e">$${fmt(r.entry)}</span></span>
+        <span class="lk"><span class="lt">Stop</span><span class="lv s">$${fmt(r.stop)}</span></span>
+        <span class="lk"><span class="lt">Target</span><span class="lv t">$${fmt(r.target)}</span></span>
+        <span class="lk"><span class="lt">R:R</span><span class="lv">${fmt(r.rr, 2)}</span></span>
+      </div>
+      <div class="foot">Structural levels from the scan — stop at invalidation, not reverse-engineered to a ratio. Not financial advice.</div>
+    </div>`;
+  }
+
+  async function loadBest() {
+    const btn = $("#bestBtn"), status = $("#bestStatus"), box = $("#bestResult");
+    if (!btn || !box) return;
+    const orig = btn.textContent;
+    btn.disabled = true; btn.textContent = "Scanning…";
+    if (status) status.textContent = "Running a live Delta scan…";
+    try {
+      const payload = Object.assign({}, params, { strict: state.strict });
+      const res = await fetch(API_BASE + "/api/best", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!data || data.ok === false) throw new Error((data && data.error) || "backend error");
+      if (data.status === "WAIT" || !data.best) {
+        box.innerHTML = `<div class="empty"><span class="big">No qualifying setup</span>${esc(data.message || "Nothing cleared all four families — the protocol is to wait.")}</div>`;
+        if (status) status.textContent = `Scanned ${data.scanned || 0} symbols · ${new Date().toLocaleTimeString()}`;
+      } else {
+        const ru = (Array.isArray(data.runners_up) && data.runners_up.length)
+          ? `<div class="foot" style="margin-top:8px">Runners-up: ${data.runners_up.map(x => esc(x.sym) + " (" + esc(String(x.dir || "").toUpperCase()) + ")").join(" · ")}</div>` : "";
+        box.innerHTML = renderBest(data.best) + ru;
+        if (status) status.textContent = `Best of ${data.scanned || 0} scanned · ${new Date().toLocaleTimeString()}`;
+      }
+    } catch (e) {
+      box.innerHTML = `<div class="empty"><span class="big">Couldn't fetch</span>${esc(String(e && e.message || e))}</div>`;
+      if (status) status.textContent = "";
+    } finally {
+      btn.disabled = false; btn.textContent = orig;
+    }
+  }
+
   function cardHTML(r) {
     const d = r.dir;
     const full = r.score8 === 8;
@@ -2951,6 +3011,8 @@
       if (v === "alerts") tgProbe();
       if (v === "tools") refreshOutcomeLab();
     });
+    const bestBtn = $("#bestBtn");
+    if (bestBtn) bestBtn.onclick = loadBest;
   }
 
   /* ---------- controls ---------- */
