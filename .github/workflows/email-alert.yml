@@ -14,9 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          
       - name: Restore cooldown state
         uses: actions/cache@v4
         with:
@@ -24,11 +26,13 @@ jobs:
           key: alert-state-${{ github.run_id }}
           restore-keys: |
             alert-state-
+            
       - name: Scan for CLEAN setups
-        run: node .github/workflows/alert-scan.js
+        id: scan  # <-- Added this so the email step can read your script's outputs
         env:
           ALERT_COOLDOWN_HOURS: "4"
-        run: node alert-scan.js
+        run: node .github/workflows/alert-scan.js # <-- Correct path to your script
+        
       - name: Email on CLEAN setup
         if: steps.scan.outputs.has_setup == 'true'
         uses: dawidd6/action-send-mail@v3
