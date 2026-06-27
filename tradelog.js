@@ -381,6 +381,11 @@ function expectancy(opt, file) {
   const byFundingState = groupBy(r => r.fundingState || null);
   const byFundingSignal = groupBy(r => r.fundingSignal || null);
   const byGroup = groupBy(r => r.correlatedExposureGroup || null);
+  // Regime-conditional expectancy: do four-family setups that ALIGN with the
+  // prevailing BTC regime resolve differently from counter-trend ones? Uses the
+  // btcRegimeAlign already stored at log time (aligned / counter / neutral), so
+  // it works on the existing sample with no new fields and no fabrication.
+  const byRegimeAlign = groupBy(r => r.btcRegimeAlign || null);
 
   const note = verdict_ready
     ? "Verdict ready — based on the resolved-trade sample below."
@@ -406,6 +411,7 @@ function expectancy(opt, file) {
     by_funding_state: byFundingState,
     by_funding_signal: byFundingSignal,
     by_group: byGroup,
+    by_regime_align: byRegimeAlign,
     not_financial_advice: true,
     generated_at: new Date().toISOString(),
   };

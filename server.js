@@ -533,6 +533,56 @@ function handleExpectancy(req, res) {
   }
 }
 
+// Best Available: run a live scan and return the SINGLE top-ranked CLEAN setup
+// (all four de-correlated families pass), ranked exactly as the scanner ranks
+// its clean set (familyScore, then score4). If nothing clears the gates it
+// returns an explicit WAIT state — it NEVER invents or downgrades a pick to
+// fill the slot. Pure scan-only; no orders. Optional body overrides settings.
+async function handleBest(req, res) {
+  let cfg;
+  try { cfg = buildConfig(req.body || {}); }
+  catch (e) { return res.status(400).json({ ok: false, error: "bad settings payload" }); }
+  try {
+    const client = new DeltaPublic(cfg);
+    const results = await scan(cfg, client);
+    let regime;
+    try { regime = await marketRegime(client, cfg); }
+    catch (e) { regime = { available: false }; }
+    for (const r of results) {
+      if (!r || r.err) continue;
+      r.btcRegimeAlign = btcRegimeAlign(regime, r.dir);
+      r.betaGate = betaGate(regime, r.dir, r.correlatedExposureGroup);
+      if (r.betaGate === "block") r.executionStatus = "AVOID";
+      else if (r.betaGate === "caution" && r.executionStatus === "ENTER") r.executionStatus = "WAIT";
+    }
+    const clean = results.filter(r => !r.err && r.corePass)
+      .sort((a, b) => (b.familyScore - a.familyScore) || (b.score4 - a.score4));
+    const evaluated = results.filter(r => !r.err);
+    if (!clean.length) {
+      return res.json({
+        ok: true, status: "WAIT", best: null,
+        scanned: evaluated.length,
+        market_regime: regime,
+        message: "No qualifying setup right now — the protocol is to wait. Nothing cleared all four families.",
+        not_financial_advice: true,
+        scanned_at: new Date().toISOString(),
+      });
+    }
+    const best = clean[0];
+    res.json({
+      ok: true, status: "BEST_AVAILABLE", best,
+      runners_up: clean.slice(1, 3),
+      scanned: evaluated.length,
+      market_regime: regime,
+      note: "Top-ranked live four-family CLEAN setup. Stops/targets are structural (from the scan), not a recommendation. Public Delta data, scan-only, no orders.",
+      not_financial_advice: true,
+      scanned_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    res.status(422).json({ ok: false, error: String(e && e.message || e), hint: "Delta public API unreachable from this host." });
+  }
+}
+
 // Factor evaluation over live Delta candles for ONE symbol. Pure analysis: one
 // public candle fetch, deflated-Sharpe out-of-sample, no orders. Query params:
 // symbol (required), resolution (default 1h), bars (default 500), ema_fast,
@@ -668,6 +718,7 @@ async function handleResolve(req, res) {
 app.get("/api/tradelog/expectancy", handleExpectancy);
 app.get("/api/tradelog/sizing", handleSizing);
 app.get("/api/factorlab", handleFactorlab);
+app.post("/api/best", scanLimiter, handleBest);
 app.get("/api/factorlab/sweep", handleFactorlabSweep);
 app.get("/api/tradelog/recent", handleRecent);
 app.post("/api/tradelog/resolve", mutationLimiter, handleResolve);
