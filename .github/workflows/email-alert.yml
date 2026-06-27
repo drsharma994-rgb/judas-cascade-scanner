@@ -1,19 +1,10 @@
-# Emails you when a CLEAN four-family setup forms on live Delta data.
-# Runs on a schedule (and on demand). SCAN-ONLY — no orders. Email is sent via
-# YOUR Gmail App Password, stored as repo secrets (never in this file):
-#   GMAIL_USER          your full gmail address (also the From)
-#   GMAIL_APP_PASSWORD  16-char app password from myaccount.google.com/apppasswords
-#   ALERT_TO            where to send the alert (can be the same gmail)
-# Note: GitHub's scheduled runs can be delayed under load, so alerts are
-# near-real-time, not instant. Cooldown prevents repeat emails for the same setup.
 name: email-alert
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every 30 minutes (UTC)
-  workflow_dispatch:           # manual "Run workflow" button for testing
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
 
-# Avoid overlapping runs.
 concurrency:
   group: email-alert
   cancel-in-progress: false
@@ -23,12 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      # Restore the per-setup cooldown state from the previous run (best-effort).
       - name: Restore cooldown state
         uses: actions/cache@v4
         with:
@@ -36,12 +24,11 @@ jobs:
           key: alert-state-${{ github.run_id }}
           restore-keys: |
             alert-state-
-     
       - name: Scan for CLEAN setups
-       working-directory: .github/workflows/email-alert.yml  # <-- Change this to your subfolder name
+        id: scan
+        env:
+          ALERT_COOLDOWN_HOURS: "4"
         run: node alert-scan.js
-          
-  
       - name: Email on CLEAN setup
         if: steps.scan.outputs.has_setup == 'true'
         uses: dawidd6/action-send-mail@v3
