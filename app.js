@@ -29,6 +29,7 @@
       { id: "account_size", label: "Account size", type: "num", val: 1000, step: 100, hint: "for $ position sizing (in-memory only)" },
       { id: "risk_pct", label: "Risk per trade %", type: "num", val: 1, step: 0.25, hint: "$ risk = size × this" },
       { id: "max_leverage", label: "Max leverage cap", type: "num", val: 10, step: 1, hint: "0 = no cap · caution flag if notional needs more" },
+      { id: "maint_margin_pct", label: "Maint. margin %", type: "num", val: 0.5, step: 0.1, hint: "for liquidation estimate (isolated) — tune to match Delta" },
       { id: "tp1_book_pct", label: "Book % at TP1 (1R)", type: "num", val: 50, step: 5, hint: "partial booking; rest to final TP" },
     ]},
     { title: "RSI", icon: "~", fields: [
@@ -345,8 +346,38 @@
       levNote = "—";
     }
     const maxLoss = riskAmt;                                   // by construction = risk amount
+
+    // --- Liquidation clearance (isolated-margin estimate) -------------------
+    // The stop must trigger BEFORE liquidation, or it's not a stop. Max safe
+    // leverage depends only on stop distance + maintenance margin, NOT account
+    // size. This is the guard that a stop-sitting-on-liq position fails.
+    const mmr = Math.max(0, +params.maint_margin_pct || 0) / 100;
+    const LIQ_BUFFER = 0.25;                                   // want liq 25% beyond stop
+    const stopFrac = r.entry > 0 ? stopDist / r.entry : 0;
+    const denom = stopFrac * (1 + LIQ_BUFFER) + mmr;
+    const maxSafeLev = denom > 0 ? Math.floor((1 / denom) * 10) / 10 : 0;
+    const Luse = levCap > 0 ? levCap : (reqLev > 0 ? reqLev : 0);
+    let liqPrice = null, liqClears = true, liqOk = true, liqNote;
+    if (Luse > 0 && r.entry > 0) {
+      liqPrice = r.dir === "long"
+        ? r.entry * (1 - 1 / Luse + mmr)
+        : r.entry * (1 + 1 / Luse - mmr);
+      liqClears = r.dir === "long" ? (r.stop > liqPrice) : (r.stop < liqPrice);
+    }
+    if (Luse <= 0) {
+      liqNote = `max safe ${maxSafeLev}× — set a leverage to check liq`;
+    } else if (!liqClears) {
+      liqOk = false;
+      liqNote = `STOP INSIDE LIQ at ${Luse % 1 ? Luse.toFixed(1) : Luse}× (liq $${fmtPrice(liqPrice)}) — drop to ≤${maxSafeLev}×`;
+    } else if (levCap > 0 && levCap > maxSafeLev + 1e-9) {
+      liqNote = `clears, but cap ${levCap}× > safe ${maxSafeLev}× — thin buffer`;
+    } else {
+      liqNote = `clears — liq $${fmtPrice(liqPrice)}, max safe ${maxSafeLev}×`;
+    }
+
     return {
       acct, riskPct, riskAmt, stopDist, qty, notional, reqLev, levCap, levOk, levNote, maxLoss,
+      maxSafeLev, liqPrice, liqClears, liqOk, liqNote,
       valid: acct > 0 && riskPct > 0 && stopDist > 0,
     };
   }
@@ -1993,6 +2024,7 @@
       <div class="exrow"><span class="exk">Stop distance</span><span class="exv">$${fmtPrice(sz.stopDist)} <small>(${(r.slPct||0).toFixed(2)}%)</small></span></div>
       <div class="exrow"><span class="exk">Suggested size</span><span class="exv">${sz.qty>=1?sz.qty.toFixed(2):sz.qty.toPrecision(3)} units <small>≈ $${sz.notional.toFixed(2)} notional</small></span></div>
       <div class="exrow"><span class="exk">Leverage</span><span class="exv ${sz.levOk?"":"bad"}">${esc(sz.levNote)}</span></div>
+      <div class="exrow"><span class="exk">Liq clearance</span><span class="exv ${sz.liqOk?"":"bad"}">${esc(sz.liqNote)}</span></div>
       <div class="exrow"><span class="exk">Max loss if SL hits</span><span class="exv bad">-$${sz.maxLoss.toFixed(2)}</span></div>`
       : `<div class="exnote">Set <b>Account size</b> and <b>Risk %</b> in Settings to compute position sizing (kept in memory only).</div>`;
 
@@ -2072,6 +2104,7 @@
     ];
     if (sz.valid) {
       lines.push(`Size ${sz.qty>=1?sz.qty.toFixed(2):sz.qty.toPrecision(3)} units ≈ $${sz.notional.toFixed(2)} notional · risk $${sz.riskAmt.toFixed(2)} (${sz.riskPct}%) · max loss -$${sz.maxLoss.toFixed(2)} · ${sz.levNote}`);
+      lines.push(`Liq: ${sz.liqNote}`);
     }
     lines.push("Invalidation:");
     invalidationList(r).forEach(b => lines.push("  - " + b));
